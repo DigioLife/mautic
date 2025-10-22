@@ -1,0 +1,937 @@
+// MarketFlow Database Schema
+// Multi-tenant architecture with tenant isolation
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========================================
+// MASTER ADMIN & SYSTEM
+// ========================================
+
+model MasterAdmin {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("master_admins")
+}
+
+model SystemSettings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  type      String   @default("string") // string, number, boolean, json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+// ========================================
+// TENANTS (WORKSPACES/BUSINESSES)
+// ========================================
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique // for subdomain or URL
+  email     String
+  phone     String?
+  logo      String?
+  website   String?
+
+  // Subscription & Billing
+  subscriptionTier      String   @default("starter") // starter, basic, growth, pro, business, enterprise, ultimate
+  contactLimit          Int      @default(500)
+  contactCount          Int      @default(0)
+  billingEmail          String?
+  pabblyCustomerId      String?  @unique
+  pabblySubscriptionId  String?  @unique
+  subscriptionStatus    String   @default("trial") // trial, active, past_due, canceled
+  subscriptionStartDate DateTime?
+  subscriptionEndDate   DateTime?
+  trialEndsAt           DateTime?
+
+  // Features
+  enabledFeatures Json     @default("[]") // ["email", "sms", "telegram", "viber", "chat"]
+  customDomain    String?
+
+  // Status
+  isActive  Boolean  @default(true)
+  isPaused  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  users         User[]
+  contacts      Contact[]
+  segments      Segment[]
+  tags          Tag[]
+  emailCampaigns EmailCampaign[]
+  emailTemplates EmailTemplate[]
+  smsCampaigns   SmsCampaign[]
+  workflows      Workflow[]
+  forms          Form[]
+  landingPages   LandingPage[]
+  conversations  Conversation[]
+  integrations   Integration[]
+  webhooks       Webhook[]
+  apiKeys        ApiKey[]
+  activityLogs   ActivityLog[]
+  customFields   CustomField[]
+
+  @@map("tenants")
+}
+
+// ========================================
+// USERS & AUTHENTICATION
+// ========================================
+
+enum UserRole {
+  OWNER   // Full access
+  ADMIN   // Admin access
+  MEMBER  // Limited access
+}
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
+  TELEGRAM
+}
+
+model User {
+  id            String   @id @default(cuid())
+  tenantId      String
+  email         String
+  password      String?  // Null for OAuth users
+  name          String
+  avatar        String?
+  role          UserRole @default(MEMBER)
+
+  // Auth
+  authProvider  AuthProvider @default(EMAIL)
+  googleId      String?      @unique
+  telegramId    String?      @unique
+
+  // Status
+  isActive      Boolean  @default(true)
+  emailVerified Boolean  @default(false)
+  lastLoginAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  refreshTokens    RefreshToken[]
+  chatMessages     ChatMessage[]
+  activityLogs     ActivityLog[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([email])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ========================================
+// CONTACTS & LEADS
+// ========================================
+
+model Contact {
+  id        String   @id @default(cuid())
+  tenantId  String
+
+  // Basic Info
+  email         String?
+  phone         String?
+  firstName     String?
+  lastName      String?
+  fullName      String?
+  company       String?
+  jobTitle      String?
+  website       String?
+  avatar        String?
+
+  // Location
+  country       String?
+  state         String?
+  city          String?
+  address       String?
+  zipCode       String?
+  timezone      String?
+
+  // Social
+  telegramId    String?
+  telegramUsername String?
+  viberId       String?
+  whatsappNumber String?
+  linkedinUrl   String?
+  twitterHandle String?
+
+  // Engagement
+  leadScore     Int      @default(0)
+  lifecycleStage String  @default("lead") // lead, mql, sql, customer, evangelist
+  source        String?  // organic, paid, referral, etc.
+
+  // Tracking
+  lastActivityAt DateTime?
+  firstSeenAt    DateTime  @default(now())
+
+  // Custom Fields (JSON)
+  customFields  Json      @default("{}")
+
+  // Status
+  isSubscribed  Boolean   @default(true)
+  doNotEmail    Boolean   @default(false)
+  doNotSms      Boolean   @default(false)
+  doNotCall     Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tags                ContactTag[]
+  segments            ContactSegment[]
+  events              ContactEvent[]
+  messages            Message[]
+  formSubmissions     FormSubmission[]
+  conversations       Conversation[]
+  workflowExecutions  WorkflowExecution[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([email])
+  @@index([phone])
+  @@index([telegramId])
+  @@map("contacts")
+}
+
+model Tag {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  color     String?  @default("#3B82F6")
+  createdAt DateTime @default(now())
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contacts ContactTag[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("tags")
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@index([contactId])
+  @@index([tagId])
+  @@map("contact_tags")
+}
+
+model Segment {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+
+  // Filters (JSON array of conditions)
+  filters     Json     @default("[]")
+
+  // Cache
+  contactCount Int     @default(0)
+  lastComputedAt DateTime?
+
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contacts ContactSegment[]
+
+  @@index([tenantId])
+  @@map("segments")
+}
+
+model ContactSegment {
+  contactId String
+  segmentId String
+  addedAt   DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  segment Segment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, segmentId])
+  @@index([contactId])
+  @@index([segmentId])
+  @@map("contact_segments")
+}
+
+model CustomField {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String   // Display name
+  key       String   // Field key for JSON storage
+  type      String   // text, number, date, boolean, select
+  options   Json?    // For select type
+  isRequired Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@map("custom_fields")
+}
+
+// ========================================
+// EMAIL CAMPAIGNS & TEMPLATES
+// ========================================
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  subject   String
+  preheader String?
+
+  // Content
+  htmlContent String   @db.Text
+  jsonContent Json?    // For email builder
+
+  // Metadata
+  thumbnail   String?
+  category    String?
+  isPublic    Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaigns EmailCampaign[]
+
+  @@index([tenantId])
+  @@map("email_templates")
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  PAUSED
+  CANCELLED
+}
+
+model EmailCampaign {
+  id         String   @id @default(cuid())
+  tenantId   String
+  name       String
+  subject    String
+  preheader  String?
+  fromName   String
+  fromEmail  String
+  replyTo    String?
+
+  // Content
+  htmlContent String   @db.Text
+  jsonContent Json?
+  templateId  String?
+
+  // Sending
+  status      CampaignStatus @default(DRAFT)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+
+  // Targeting
+  segmentId   String?
+  recipientCount Int     @default(0)
+
+  // Stats
+  totalSent     Int @default(0)
+  totalDelivered Int @default(0)
+  totalOpened   Int @default(0)
+  totalClicked  Int @default(0)
+  totalBounced  Int @default(0)
+  totalUnsubscribed Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  messages Message[]
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("email_campaigns")
+}
+
+// ========================================
+// SMS CAMPAIGNS
+// ========================================
+
+model SmsCampaign {
+  id         String   @id @default(cuid())
+  tenantId   String
+  name       String
+  message    String   @db.Text
+  fromNumber String?
+
+  // Sending
+  status      CampaignStatus @default(DRAFT)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+
+  // Targeting
+  segmentId   String?
+  recipientCount Int     @default(0)
+
+  // Stats
+  totalSent     Int @default(0)
+  totalDelivered Int @default(0)
+  totalFailed   Int @default(0)
+  totalClicked  Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("sms_campaigns")
+}
+
+// ========================================
+// UNIFIED MESSAGES
+// ========================================
+
+enum MessageChannel {
+  EMAIL
+  SMS
+  TELEGRAM
+  VIBER
+  WHATSAPP
+}
+
+enum MessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  FAILED
+  UNSUBSCRIBED
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  tenantId  String   // Denormalized for performance
+  contactId String
+
+  // Channel
+  channel   MessageChannel
+
+  // Campaign
+  emailCampaignId String?
+  smsCampaignId   String?
+  workflowId      String?
+
+  // Content
+  subject   String?
+  content   String   @db.Text
+
+  // Sending
+  status    MessageStatus @default(QUEUED)
+  sentAt    DateTime?
+  deliveredAt DateTime?
+  openedAt  DateTime?
+  clickedAt DateTime?
+  failedAt  DateTime?
+  errorMessage String?
+
+  // Tracking
+  openCount  Int @default(0)
+  clickCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contact        Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  emailCampaign  EmailCampaign? @relation(fields: [emailCampaignId], references: [id], onDelete: SetNull)
+  smsCampaign    SmsCampaign?   @relation(fields: [smsCampaignId], references: [id], onDelete: SetNull)
+  workflow       Workflow?      @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  events         MessageEvent[]
+
+  @@index([tenantId])
+  @@index([contactId])
+  @@index([channel])
+  @@index([status])
+  @@map("messages")
+}
+
+model MessageEvent {
+  id        String   @id @default(cuid())
+  messageId String
+  type      String   // open, click, bounce, unsubscribe, etc.
+  data      Json?    // Additional data
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([type])
+  @@map("message_events")
+}
+
+// ========================================
+// WORKFLOWS (CAMPAIGNS/AUTOMATION)
+// ========================================
+
+model Workflow {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+
+  // Visual Builder Data
+  nodes       Json     @default("[]") // Array of nodes
+  edges       Json     @default("[]") // Array of connections
+
+  // Status
+  status      String   @default("draft") // draft, active, paused, completed
+  isActive    Boolean  @default(false)
+
+  // Stats
+  totalEntered    Int @default(0)
+  totalCompleted  Int @default(0)
+  totalActive     Int @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executions WorkflowExecution[]
+  messages   Message[]
+
+  @@index([tenantId])
+  @@index([isActive])
+  @@map("workflows")
+}
+
+model WorkflowExecution {
+  id         String   @id @default(cuid())
+  workflowId String
+  contactId  String
+
+  // Execution State
+  currentNodeId String?
+  status        String   @default("active") // active, completed, failed, stopped
+
+  // Timestamps
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  // Data (context for workflow)
+  data        Json      @default("{}")
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  contact  Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  logs     WorkflowLog[]
+
+  @@index([workflowId])
+  @@index([contactId])
+  @@index([status])
+  @@map("workflow_executions")
+}
+
+model WorkflowLog {
+  id          String   @id @default(cuid())
+  executionId String
+  nodeId      String
+  action      String   // entered, completed, failed, etc.
+  data        Json?
+  error       String?
+  createdAt   DateTime @default(now())
+
+  execution WorkflowExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId])
+  @@map("workflow_logs")
+}
+
+// ========================================
+// FORMS
+// ========================================
+
+model Form {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+
+  // Form Configuration
+  fields    Json     @default("[]") // Array of field definitions
+  settings  Json     @default("{}") // Form settings
+
+  // Success Action
+  successMessage String?
+  redirectUrl    String?
+
+  // Status
+  isActive  Boolean  @default(true)
+
+  // Stats
+  viewCount      Int @default(0)
+  submissionCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  submissions FormSubmission[]
+
+  @@index([tenantId])
+  @@map("forms")
+}
+
+model FormSubmission {
+  id        String   @id @default(cuid())
+  formId    String
+  contactId String?
+
+  // Submission Data
+  data      Json
+
+  // Metadata
+  ipAddress String?
+  userAgent String?
+  referrer  String?
+
+  createdAt DateTime @default(now())
+
+  form    Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([formId])
+  @@index([contactId])
+  @@map("form_submissions")
+}
+
+// ========================================
+// LANDING PAGES
+// ========================================
+
+model LandingPage {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  slug      String   @unique
+
+  // Content
+  title       String
+  description String?
+  htmlContent String   @db.Text
+  jsonContent Json?    // For page builder
+
+  // SEO
+  metaTitle       String?
+  metaDescription String?
+  metaKeywords    String?
+
+  // Status
+  isPublished Boolean  @default(false)
+  publishedAt DateTime?
+
+  // Stats
+  viewCount       Int @default(0)
+  conversionCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([slug])
+  @@map("landing_pages")
+}
+
+// ========================================
+// LIVE CHAT
+// ========================================
+
+model Conversation {
+  id        String   @id @default(cuid())
+  tenantId  String
+  contactId String
+
+  // Status
+  status    String   @default("open") // open, closed, resolved
+  assignedTo String? // userId
+
+  // Metadata
+  channel   String   @default("chat") // chat, email, telegram, viber
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact  Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([tenantId])
+  @@index([contactId])
+  @@index([status])
+  @@map("conversations")
+}
+
+model ChatMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+
+  // Sender
+  senderId   String?  // userId or contactId
+  senderType String   // user or contact
+
+  // Content
+  message    String   @db.Text
+  attachments Json?   // Array of file URLs
+
+  // Status
+  isRead     Boolean  @default(false)
+  readAt     DateTime?
+
+  createdAt  DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [senderId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId])
+  @@map("chat_messages")
+}
+
+// ========================================
+// CONTACT EVENTS & TRACKING
+// ========================================
+
+model ContactEvent {
+  id        String   @id @default(cuid())
+  contactId String
+  tenantId  String   // Denormalized for performance
+
+  // Event Type
+  type      String   // page_view, form_submit, email_open, link_click, custom
+
+  // Event Data
+  data      Json?
+
+  // Metadata
+  ipAddress String?
+  userAgent String?
+  referrer  String?
+  url       String?
+
+  createdAt DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@index([tenantId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("contact_events")
+}
+
+// ========================================
+// INTEGRATIONS
+// ========================================
+
+model Integration {
+  id        String   @id @default(cuid())
+  tenantId  String
+
+  // Integration Type
+  type      String   // resend, sendgrid, mailgun, ses, twilio, telegram, viber
+  name      String
+
+  // Configuration
+  config    Json     // API keys, settings, etc. (encrypted)
+
+  // Status
+  isActive  Boolean  @default(true)
+  isDefault Boolean  @default(false) // Default for this type
+
+  // Health Check
+  lastCheckedAt DateTime?
+  lastStatus    String?   @default("unknown") // healthy, error, unknown
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, type, name])
+  @@index([tenantId])
+  @@map("integrations")
+}
+
+// ========================================
+// WEBHOOKS
+// ========================================
+
+model Webhook {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  url       String
+
+  // Events to trigger
+  events    Json     @default("[]") // Array of event types
+
+  // Headers & Auth
+  headers   Json?
+  secret    String?
+
+  // Status
+  isActive  Boolean  @default(true)
+
+  // Stats
+  totalCalls    Int @default(0)
+  failedCalls   Int @default(0)
+  lastCalledAt  DateTime?
+  lastStatus    Int? // HTTP status code
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  logs   WebhookLog[]
+
+  @@index([tenantId])
+  @@map("webhooks")
+}
+
+model WebhookLog {
+  id        String   @id @default(cuid())
+  webhookId String
+
+  // Request
+  event     String
+  payload   Json
+
+  // Response
+  statusCode Int
+  response   String?  @db.Text
+  error      String?
+
+  // Timing
+  duration   Int?     // milliseconds
+
+  createdAt DateTime @default(now())
+
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId])
+  @@map("webhook_logs")
+}
+
+// ========================================
+// API KEYS
+// ========================================
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  key       String   @unique
+
+  // Permissions
+  permissions Json   @default("[]") // Array of allowed actions
+
+  // Status
+  isActive  Boolean  @default(true)
+  expiresAt DateTime?
+
+  // Usage
+  lastUsedAt DateTime?
+  usageCount Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([key])
+  @@map("api_keys")
+}
+
+// ========================================
+// ACTIVITY LOGS
+// ========================================
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String?
+
+  // Activity
+  action    String   // created, updated, deleted, etc.
+  entity    String   // contact, campaign, workflow, etc.
+  entityId  String?
+
+  // Details
+  description String?
+  metadata    Json?
+
+  // Metadata
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
