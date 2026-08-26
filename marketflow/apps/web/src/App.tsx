@@ -12,7 +12,8 @@ import MasterAdminLayout from './layouts/MasterAdminLayout';
 import MasterDashboardPage from './pages/master/MasterDashboardPage';
 
 function App() {
-  const { isAuthenticated, isLoading, checkAuth } = useAuthStore();
+  const { user, isAuthenticated, isLoading, checkAuth } = useAuthStore();
+  const isMasterAdmin = Boolean(user?.isMasterAdmin);
 
   useEffect(() => {
     checkAuth();
@@ -32,10 +33,18 @@ function App() {
       <Route path="/login" element={!isAuthenticated ? <LoginPage /> : <Navigate to="/dashboard" />} />
       <Route path="/register" element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/dashboard" />} />
 
-      {/* Protected routes */}
+      {/* Protected routes — tenant users only, master admins belong in /master */}
       <Route
         path="/dashboard"
-        element={isAuthenticated ? <DashboardLayout /> : <Navigate to="/login" />}
+        element={
+          !isAuthenticated ? (
+            <Navigate to="/login" />
+          ) : isMasterAdmin ? (
+            <Navigate to="/master" />
+          ) : (
+            <DashboardLayout />
+          )
+        }
       >
         <Route index element={<DashboardPage />} />
         <Route path="contacts" element={<ContactsPage />} />
@@ -43,17 +52,27 @@ function App() {
         <Route path="workflows" element={<WorkflowsPage />} />
       </Route>
 
-      {/* Master Admin routes */}
+      {/* Master Admin routes — gated by role, not just auth. Server-side
+          endpoints already enforce this via requireMasterAdmin; this guard
+          only stops a regular tenant user from landing on the admin shell. */}
       <Route
         path="/master"
-        element={isAuthenticated ? <MasterAdminLayout /> : <Navigate to="/login" />}
+        element={
+          !isAuthenticated ? (
+            <Navigate to="/login" />
+          ) : isMasterAdmin ? (
+            <MasterAdminLayout />
+          ) : (
+            <Navigate to="/dashboard" />
+          )
+        }
       >
         <Route index element={<MasterDashboardPage />} />
       </Route>
 
       {/* Default redirect */}
-      <Route path="/" element={<Navigate to="/dashboard" />} />
-      <Route path="*" element={<Navigate to="/dashboard" />} />
+      <Route path="/" element={<Navigate to={isMasterAdmin ? '/master' : '/dashboard'} />} />
+      <Route path="*" element={<Navigate to={isMasterAdmin ? '/master' : '/dashboard'} />} />
     </Routes>
   );
 }

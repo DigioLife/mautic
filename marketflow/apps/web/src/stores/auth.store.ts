@@ -129,9 +129,11 @@ export const useAuthStore = create<AuthState>()(
           if (refreshToken) {
             try {
               const response = await api.post('/auth/refresh', { refreshToken });
-              const { accessToken: newAccessToken } = response.data.data;
+              // Refresh tokens rotate on every use — the old one is invalidated
+              // server-side, so we must persist the new one it returns.
+              const { accessToken: newAccessToken, refreshToken: newRefreshToken } = response.data.data;
 
-              get().setTokens(newAccessToken, refreshToken);
+              get().setTokens(newAccessToken, newRefreshToken);
 
               // Retry checkAuth
               await get().checkAuth();

@@ -8,10 +8,14 @@ import websocket from '@fastify/websocket';
 import dotenv from 'dotenv';
 import { logger } from './core/logger';
 import { errorHandler } from './core/error-handler';
+import { validateEnv } from './core/env';
 import { registerRoutes } from './routes';
 
 // Load environment variables
 dotenv.config();
+
+// Fail fast on insecure/missing config before anything else boots
+validateEnv();
 
 const PORT = parseInt(process.env.PORT || '4000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -30,8 +34,14 @@ async function start() {
       contentSecurityPolicy: false, // Adjust for your needs
     });
 
+    // Supports a comma-separated list so previews (Lovable) + production can coexist
+    const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+
     await server.register(cors, {
-      origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+      origin: corsOrigins,
       credentials: true,
     });
 

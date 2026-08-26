@@ -113,7 +113,7 @@ enum AuthProvider {
 model User {
   id            String   @id @default(cuid())
   tenantId      String
-  email         String
+  email         String   @unique
   password      String?  // Null for OAuth users
   name          String
   avatar        String?
@@ -137,9 +137,7 @@ model User {
   chatMessages     ChatMessage[]
   activityLogs     ActivityLog[]
 
-  @@unique([tenantId, email])
   @@index([tenantId])
-  @@index([email])
   @@map("users")
 }
 
@@ -208,6 +206,11 @@ model Contact {
   doNotEmail    Boolean   @default(false)
   doNotSms      Boolean   @default(false)
   doNotCall     Boolean   @default(false)
+
+  // GDPR Consent
+  consentGivenAt DateTime? // When the contact consented to marketing communication
+  consentSource  String?   // form, import, api, manual, website_tracking
+  consentIp      String?   // IP address at time of consent (for proof of consent)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -790,8 +793,10 @@ model Integration {
   type      String   // resend, sendgrid, mailgun, ses, twilio, telegram, viber
   name      String
 
-  // Configuration
-  config    Json     // API keys, settings, etc. (encrypted)
+  // Configuration — MUST be passed through apps/api/src/core/crypto.ts
+  // encryptJson() before writing, decryptJson() after reading. This column
+  // holds raw provider API keys (Resend/SendGrid/Twilio/etc.) per tenant.
+  config    Json
 
   // Status
   isActive  Boolean  @default(true)

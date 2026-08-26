@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    paths:
+      - 'marketflow/**'
+  pull_request:
+    paths:
+      - 'marketflow/**'
+
+defaults:
+  run:
+    working-directory: marketflow
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 8.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: marketflow/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      # apps/api and apps/web both run `tsc` as part of their build script,
+      # so this is the typecheck too — packages/database and packages/shared
+      # have no build step of their own (types are consumed directly by ts-node/tsx).
+      - name: Build
+        run: pnpm build
+        env:
+          # Dummy values so build-time env validation doesn't block CI —
+          # never real secrets, this job never talks to a live database.
+          NODE_ENV: development
+          DATABASE_URL: postgresql://user:pass@localhost:5432/marketflow_ci

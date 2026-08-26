@@ -1,7 +1,15 @@
 import bcrypt from 'bcryptjs';
-import { prisma, User, MasterAdmin } from '@marketflow/database';
+import { prisma } from '@marketflow/database';
 import { AppError } from '../../core/error-handler';
 import { nanoid } from 'nanoid';
+
+// Slugs that must not be assignable to a tenant (route/subdomain collisions)
+export const RESERVED_SLUGS = new Set([
+  'admin', 'api', 'app', 'master', 'www', 'mail', 'ftp', 'root',
+  'dashboard', 'auth', 'login', 'register', 'logout', 'billing',
+  'support', 'help', 'docs', 'status', 'static', 'assets', 'cdn',
+  'blog', 'about', 'contact', 'pricing', 'settings', 'demo', 'test',
+]);
 
 export interface RegisterData {
   tenantName: string;
@@ -35,13 +43,17 @@ export interface TelegramAuthData {
 export class AuthService {
   // Register new tenant with owner user
   async register(data: RegisterData) {
-    // Check if email already exists
-    const existingUser = await prisma.user.findFirst({
+    // Check if email already exists (globally unique across all tenants)
+    const existingUser = await prisma.user.findUnique({
       where: { email: data.email },
     });
 
     if (existingUser) {
       throw new AppError('Email already registered', 400, 'EMAIL_EXISTS');
+    }
+
+    if (RESERVED_SLUGS.has(data.tenantSlug.toLowerCase())) {
+      throw new AppError('This business URL is reserved, please choose another', 400, 'SLUG_RESERVED');
     }
 
     // Check if slug is taken
@@ -122,7 +134,7 @@ export class AuthService {
     }
 
     // Regular User Login
-    const user = await prisma.user.findFirst({
+    const user = await prisma.user.findUnique({
       where: { email: data.email },
       include: { tenant: true },
     });
@@ -206,6 +218,19 @@ export class AuthService {
     // New user - check if registering with tenant
     if (!tenantSlug) {
       throw new AppError('Tenant slug required for new registration', 400, 'TENANT_REQUIRED');
+    }
+
+    if (RESERVED_SLUGS.has(tenantSlug.toLowerCase())) {
+      throw new AppError('This business URL is reserved, please choose another', 400, 'SLUG_RESERVED');
+    }
+
+    const existingEmailUser = await prisma.user.findUnique({ where: { email: data.email } });
+    if (existingEmailUser) {
+      throw new AppError(
+        'An account with this email already exists. Please sign in with your password instead.',
+        400,
+        'EMAIL_EXISTS'
+      );
     }
 
     // Create new tenant and user
@@ -295,8 +320,17 @@ export class AuthService {
       throw new AppError('Tenant slug required for new registration', 400, 'TENANT_REQUIRED');
     }
 
+    if (RESERVED_SLUGS.has(tenantSlug.toLowerCase())) {
+      throw new AppError('This business URL is reserved, please choose another', 400, 'SLUG_RESERVED');
+    }
+
     const name = `${data.firstName} ${data.lastName || ''}`.trim();
     const email = data.username ? `${data.username}@telegram.user` : `${data.telegramId}@telegram.user`;
+
+    const existingEmailUser = await prisma.user.findUnique({ where: { email } });
+    if (existingEmailUser) {
+      throw new AppError('An account already exists for this Telegram profile', 400, 'EMAIL_EXISTS');
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       const tenant = await tx.tenant.create({
@@ -362,8 +396,11 @@ export class AuthService {
     return token;
   }
 
-  // Verify refresh token
-  async verifyRefreshToken(token: string) {
+  // Verify + rotate refresh token: old token is invalidated and a new one issued.
+  // Rotation means a stolen-and-reused token is a one-shot — the legitimate
+  // client's next refresh will fail once the attacker has already rotated it,
+  // which is a visible signal something is wrong (worth alerting on later).
+  async rotateRefreshToken(token: string) {
     const refreshToken = await prisma.refreshToken.findUnique({
       where: { token },
       include: {
@@ -382,7 +419,10 @@ export class AuthService {
       throw new AppError('Refresh token expired', 401, 'TOKEN_EXPIRED');
     }
 
-    return refreshToken.user;
+    await prisma.refreshToken.delete({ where: { token } });
+    const newToken = await this.createRefreshToken(refreshToken.userId);
+
+    return { user: refreshToken.user, refreshToken: newToken };
   }
 
   // Revoke refresh token

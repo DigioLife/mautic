@@ -6,6 +6,11 @@
 !.ddev
 !.php-cs-fixer.php
 !.github/ci-files/.my.cnf
+# MarketFlow (marketflow/) is a separate Node.js project nested in this repo
+# and needs its own dotfiles tracked despite the blanket .* rule above.
+!/marketflow/.env.example
+!/marketflow/apps/web/.env.example
+!/marketflow/.dockerignore
 .ddev/mautic-preference
 /.ddev/docker-compose.host-docker-internal.yaml
 !.gitpod.Dockerfile
