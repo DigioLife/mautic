@@ -132,10 +132,11 @@ model User {
   updatedAt     DateTime @updatedAt
 
   // Relations
-  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  refreshTokens    RefreshToken[]
-  chatMessages     ChatMessage[]
-  activityLogs     ActivityLog[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  refreshTokens      RefreshToken[]
+  chatMessages       ChatMessage[]
+  activityLogs       ActivityLog[]
+  verificationTokens VerificationToken[]
 
   @@index([tenantId])
   @@map("users")
@@ -144,7 +145,8 @@ model User {
 model RefreshToken {
   id        String   @id @default(cuid())
   userId    String
-  token     String   @unique
+  // SHA-256 hash of the bearer token — see VerificationToken.tokenHash for why.
+  tokenHash String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -152,6 +154,30 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
+}
+
+enum VerificationTokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+model VerificationToken {
+  id        String                 @id @default(cuid())
+  userId    String
+  type      VerificationTokenType
+  // SHA-256 hash of the token, never the raw value — mirrors RefreshToken's
+  // posture of not storing bearer secrets in plaintext, since a DB read
+  // (backup leak, read replica, admin query) would otherwise hand out
+  // working reset links.
+  tokenHash String                 @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime               @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("verification_tokens")
 }
 
 // ========================================

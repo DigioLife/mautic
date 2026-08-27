@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 
 // AES-256-GCM at-rest encryption for sensitive JSON blobs (provider API keys,
 // OAuth tokens, etc.) stored in columns like Integration.config. ENCRYPTION_KEY
@@ -46,4 +46,14 @@ export function decryptJson<T = unknown>(payload: string): T {
   ]);
 
   return JSON.parse(decrypted.toString('utf8'));
+}
+
+/**
+ * One-way SHA-256 hash for bearer tokens (refresh tokens, email-verify /
+ * password-reset tokens) before they're stored. These are compared by exact
+ * match on lookup, never decrypted back — unlike encryptJson/decryptJson,
+ * this is deliberately irreversible.
+ */
+export function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }

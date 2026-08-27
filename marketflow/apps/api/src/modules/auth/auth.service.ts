@@ -2,6 +2,13 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '@marketflow/database';
 import { AppError } from '../../core/error-handler';
 import { nanoid } from 'nanoid';
+import { sha256Hex } from '../../core/crypto';
+import { sendMail, verificationEmailContent, passwordResetEmailContent } from '../../core/mailer';
+import { logger } from '../../core/logger';
+
+const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+const EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // Slugs that must not be assignable to a tenant (route/subdomain collisions)
 export const RESERVED_SLUGS = new Set([
@@ -99,6 +106,14 @@ export class AuthService {
 
       return { tenant, user };
     });
+
+    // Best-effort — a slow/misconfigured mail provider shouldn't fail signup.
+    // The user can always hit /auth/resend-verification afterward.
+    try {
+      await this.sendVerificationEmail(result.user.id, result.user.email, result.user.name);
+    } catch (error) {
+      logger.error('Failed to send verification email during registration', error);
+    }
 
     return result;
   }
@@ -380,7 +395,8 @@ export class AuthService {
     };
   }
 
-  // Create refresh token
+  // Create refresh token — returns the raw token to hand to the client;
+  // only its hash is ever persisted (see VerificationToken.tokenHash comment).
   async createRefreshToken(userId: string) {
     const token = nanoid(64);
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
@@ -388,7 +404,7 @@ export class AuthService {
     await prisma.refreshToken.create({
       data: {
         userId,
-        token,
+        tokenHash: sha256Hex(token),
         expiresAt,
       },
     });
@@ -401,8 +417,9 @@ export class AuthService {
   // client's next refresh will fail once the attacker has already rotated it,
   // which is a visible signal something is wrong (worth alerting on later).
   async rotateRefreshToken(token: string) {
+    const tokenHash = sha256Hex(token);
     const refreshToken = await prisma.refreshToken.findUnique({
-      where: { token },
+      where: { tokenHash },
       include: {
         user: {
           include: { tenant: true },
@@ -415,11 +432,11 @@ export class AuthService {
     }
 
     if (refreshToken.expiresAt < new Date()) {
-      await prisma.refreshToken.delete({ where: { token } });
+      await prisma.refreshToken.delete({ where: { tokenHash } });
       throw new AppError('Refresh token expired', 401, 'TOKEN_EXPIRED');
     }
 
-    await prisma.refreshToken.delete({ where: { token } });
+    await prisma.refreshToken.delete({ where: { tokenHash } });
     const newToken = await this.createRefreshToken(refreshToken.userId);
 
     return { user: refreshToken.user, refreshToken: newToken };
@@ -427,6 +444,123 @@ export class AuthService {
 
   // Revoke refresh token
   async revokeRefreshToken(token: string) {
-    await prisma.refreshToken.deleteMany({ where: { token } });
+    await prisma.refreshToken.deleteMany({ where: { tokenHash: sha256Hex(token) } });
+  }
+
+  // Revoke every refresh token for a user — used on password reset so a
+  // stolen password doesn't matter once it's changed, and any session
+  // opened before the reset is forced to log in again.
+  async revokeAllRefreshTokens(userId: string) {
+    await prisma.refreshToken.deleteMany({ where: { userId } });
+  }
+
+  // ==============================
+  // Email verification
+  // ==============================
+
+  async sendVerificationEmail(userId: string, email: string, name: string) {
+    // Drop any unused outstanding tokens so only the latest link works
+    await prisma.verificationToken.deleteMany({
+      where: { userId, type: 'EMAIL_VERIFY', usedAt: null },
+    });
+
+    const rawToken = nanoid(48);
+    await prisma.verificationToken.create({
+      data: {
+        userId,
+        type: 'EMAIL_VERIFY',
+        tokenHash: sha256Hex(rawToken),
+        expiresAt: new Date(Date.now() + EMAIL_VERIFY_TTL_MS),
+      },
+    });
+
+    const link = `${APP_URL}/verify-email?token=${rawToken}`;
+    const content = verificationEmailContent(name, link);
+    await sendMail({ to: email, ...content });
+  }
+
+  async resendVerificationEmail(email: string) {
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    // Don't reveal whether the account exists — respond the same way either way.
+    if (!user || user.emailVerified) {
+      return;
+    }
+
+    await this.sendVerificationEmail(user.id, user.email, user.name);
+  }
+
+  async verifyEmail(rawToken: string) {
+    const tokenHash = sha256Hex(rawToken);
+    const record = await prisma.verificationToken.findUnique({ where: { tokenHash } });
+
+    if (!record || record.type !== 'EMAIL_VERIFY' || record.usedAt) {
+      throw new AppError('This verification link is invalid or has already been used', 400, 'INVALID_TOKEN');
+    }
+
+    if (record.expiresAt < new Date()) {
+      throw new AppError('This verification link has expired, please request a new one', 400, 'TOKEN_EXPIRED');
+    }
+
+    await prisma.$transaction([
+      prisma.user.update({ where: { id: record.userId }, data: { emailVerified: true } }),
+      prisma.verificationToken.update({ where: { tokenHash }, data: { usedAt: new Date() } }),
+    ]);
+  }
+
+  // ==============================
+  // Password reset
+  // ==============================
+
+  async requestPasswordReset(email: string) {
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    // OAuth-only accounts have no password to reset, and we never reveal
+    // whether an email is registered — silently no-op in both cases.
+    if (!user || !user.password) {
+      return;
+    }
+
+    await prisma.verificationToken.deleteMany({
+      where: { userId: user.id, type: 'PASSWORD_RESET', usedAt: null },
+    });
+
+    const rawToken = nanoid(48);
+    await prisma.verificationToken.create({
+      data: {
+        userId: user.id,
+        type: 'PASSWORD_RESET',
+        tokenHash: sha256Hex(rawToken),
+        expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_MS),
+      },
+    });
+
+    const link = `${APP_URL}/reset-password?token=${rawToken}`;
+    const content = passwordResetEmailContent(user.name, link);
+    await sendMail({ to: user.email, ...content });
+  }
+
+  async resetPassword(rawToken: string, newPassword: string) {
+    const tokenHash = sha256Hex(rawToken);
+    const record = await prisma.verificationToken.findUnique({ where: { tokenHash } });
+
+    if (!record || record.type !== 'PASSWORD_RESET' || record.usedAt) {
+      throw new AppError('This reset link is invalid or has already been used', 400, 'INVALID_TOKEN');
+    }
+
+    if (record.expiresAt < new Date()) {
+      throw new AppError('This reset link has expired, please request a new one', 400, 'TOKEN_EXPIRED');
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await prisma.$transaction([
+      prisma.user.update({ where: { id: record.userId }, data: { password: hashedPassword } }),
+      prisma.verificationToken.update({ where: { tokenHash }, data: { usedAt: new Date() } }),
+    ]);
+
+    // A password reset should invalidate every existing session, including
+    // whatever session an attacker who had the old password was using.
+    await this.revokeAllRefreshTokens(record.userId);
   }
 }

@@ -352,7 +352,39 @@ curl -X POST http://localhost:4000/api/auth/login \
     "email": "test@example.com",
     "password": "Test123!"
   }'
+
+# Forgot password (always responds success — doesn't leak account existence)
+curl -X POST http://localhost:4000/api/auth/forgot-password \
+  -H "Content-Type: application/json" \
+  -d '{"email": "test@example.com"}'
+
+# Reset password (token comes from the emailed link — or, with no SMTP
+# configured locally, from the API log line "[mailer] Would have sent:")
+curl -X POST http://localhost:4000/api/auth/reset-password \
+  -H "Content-Type: application/json" \
+  -d '{"token": "<token-from-email-or-log>", "newPassword": "NewPass123!"}'
+
+# Verify email (token comes from the emailed link, same dev-log fallback)
+curl -X POST http://localhost:4000/api/auth/verify-email \
+  -H "Content-Type: application/json" \
+  -d '{"token": "<token-from-email-or-log>"}'
 ```
+
+**Full auth endpoint list**: `/register`, `/login`, `/refresh`, `/logout`, `/me`,
+`/verify-email`, `/resend-verification`, `/forgot-password`, `/reset-password`,
+`/telegram` (Telegram Login Widget — see `TELEGRAM_BOT_TOKEN` in `.env`).
+`/google` and `/google/callback` are routed but not implemented yet (Phase 2).
+
+### **Running the Automated Test Suite**
+
+```bash
+pnpm test
+```
+
+Covers the auth service (registration, login, reserved slugs, cross-tenant
+email uniqueness), the Telegram Login Widget signature verification, and the
+crypto helpers used for encrypting integration credentials and hashing
+tokens at rest. No database or network access needed — Prisma is mocked.
 
 ---
 

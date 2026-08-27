@@ -36,6 +36,19 @@ const refreshTokenSchema = z.object({
   refreshToken: z.string(),
 });
 
+const emailOnlySchema = z.object({
+  email: z.string().email(),
+});
+
+const verifyEmailSchema = z.object({
+  token: z.string().min(1),
+});
+
+const resetPasswordSchema = z.object({
+  token: z.string().min(1),
+  newPassword: z.string().min(8),
+});
+
 export class AuthController {
   // POST /api/auth/register
   async register(request: FastifyRequest, reply: FastifyReply) {
@@ -150,6 +163,47 @@ export class AuthController {
         tenant: request.tenant,
       },
     });
+  }
+
+  // POST /api/auth/verify-email
+  async verifyEmail(request: FastifyRequest, reply: FastifyReply) {
+    const { token } = verifyEmailSchema.parse(request.body);
+    await authService.verifyEmail(token);
+
+    return reply.send({ success: true, message: 'Email verified successfully' });
+  }
+
+  // POST /api/auth/resend-verification
+  // Always returns success regardless of whether the email exists or is
+  // already verified — avoids leaking account existence to a caller.
+  async resendVerification(request: FastifyRequest, reply: FastifyReply) {
+    const { email } = emailOnlySchema.parse(request.body);
+    await authService.resendVerificationEmail(email);
+
+    return reply.send({
+      success: true,
+      message: 'If that email is registered and unverified, a new verification link has been sent',
+    });
+  }
+
+  // POST /api/auth/forgot-password
+  // Same no-enumeration posture as resendVerification.
+  async forgotPassword(request: FastifyRequest, reply: FastifyReply) {
+    const { email } = emailOnlySchema.parse(request.body);
+    await authService.requestPasswordReset(email);
+
+    return reply.send({
+      success: true,
+      message: 'If that email is registered, a password reset link has been sent',
+    });
+  }
+
+  // POST /api/auth/reset-password
+  async resetPassword(request: FastifyRequest, reply: FastifyReply) {
+    const { token, newPassword } = resetPasswordSchema.parse(request.body);
+    await authService.resetPassword(token, newPassword);
+
+    return reply.send({ success: true, message: 'Password reset successfully, please sign in again' });
   }
 
   // TODO: Implement Google OAuth callback (Passport.js Google Strategy)

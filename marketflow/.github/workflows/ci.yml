@@ -44,3 +44,6 @@ jobs:
           # never real secrets, this job never talks to a live database.
           NODE_ENV: development
           DATABASE_URL: postgresql://user:pass@localhost:5432/marketflow_ci
+
+      - name: Test
+        run: pnpm test

@@ -3,6 +3,9 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './stores/auth.store';
 import LoginPage from './pages/auth/LoginPage';
 import RegisterPage from './pages/auth/RegisterPage';
+import VerifyEmailPage from './pages/auth/VerifyEmailPage';
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
+import ResetPasswordPage from './pages/auth/ResetPasswordPage';
 import DashboardLayout from './layouts/DashboardLayout';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import ContactsPage from './pages/contacts/ContactsPage';
@@ -32,6 +35,13 @@ function App() {
       {/* Public routes */}
       <Route path="/login" element={!isAuthenticated ? <LoginPage /> : <Navigate to="/dashboard" />} />
       <Route path="/register" element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/dashboard" />} />
+
+      {/* Always reachable regardless of auth state — these are entered via
+          emailed links, and a stale session token in localStorage shouldn't
+          block using them. */}
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
 
       {/* Protected routes — tenant users only, master admins belong in /master */}
       <Route
